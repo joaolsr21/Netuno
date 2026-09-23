@@ -4,10 +4,5 @@
   "routes": [
     { "src": "/api/(.*)", "dest": "/api/$1" },
     { "src": "/(.*)",     "dest": "/public/$1" }
-  ],
-  "env": {
-    "MQTT_BROKER": "@mqtt_broker",
-    "MQTT_USER":   "@mqtt_user",
-    "MQTT_PASS":   "@mqtt_pass"
-  }
+  ]
 }
