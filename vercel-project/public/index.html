@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>Aquário Inteligente</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mqtt/4.3.7/mqtt.min.js"></script>
+<style>
+  :root {
+    --bg:      #08131f;
+    --surface: #0d1e30;
+    --card:    #112236;
+    --border:  #1a3351;
+    --accent:  #00c8ff;
+    --green:   #00e5b0;
+    --warn:    #ffb020;
+    --danger:  #ff4560;
+    --text:    #d6eaf8;
+    --muted:   #6a8faa;
+  }
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  html, body { height: 100%; background: var(--bg); color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif; }
+
+  /* ── Header ── */
+  header {
+    position: sticky; top: env(safe-area-inset-top,0); z-index: 20;
+    background: var(--surface); border-bottom: 1px solid var(--border);
+    padding: 0.9rem 1.4rem;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .logo { font-size: 1.05rem; font-weight: 700; display:flex; gap:0.5rem; align-items:center; }
+  .pill {
+    font-size: 0.7rem; padding: 0.25rem 0.65rem; border-radius: 20px;
+    background: var(--border); color: var(--muted);
+    display: flex; align-items: center; gap: 0.4rem;
+  }
+  .pill-dot { width:7px; height:7px; border-radius:50%; background:var(--muted); flex-shrink:0; }
+  .pill-dot.on  { background: var(--green); box-shadow: 0 0 5px var(--green); }
+  .pill-dot.err { background: var(--warn);  box-shadow: 0 0 5px var(--warn); }
+
+  /* ── Grid ── */
+  main {
+    max-width: 1000px; margin: 0 auto;
+    padding: 1.4rem; display: grid;
+    grid-template-columns: repeat(12, 1fr); gap: 0.85rem;
+  }
+
+  /* ── Cards ── */
+  .card {
+    background: var(--card); border: 1px solid var(--border);
+    border-radius: 16px; padding: 1.1rem 1.3rem;
+  }
+  .card.span2  { grid-column: span 2; }
+  .card.span3  { grid-column: span 3; }
+  .card.span4  { grid-column: span 4; }
+  .card.span6  { grid-column: span 6; }
+  .card.span12 { grid-column: span 12; }
+
+  @media (max-width: 700px) {
+    .card.span2, .card.span3, .card.span4, .card.span6 { grid-column: span 12; }
+  }
+
+  .clabel {
+    font-size: 0.68rem; text-transform: uppercase;
+    letter-spacing: 0.09em; color: var(--muted); margin-bottom: 0.45rem;
+  }
+  .cval {
+    font-size: 2rem; font-weight: 800; line-height: 1; color: var(--accent);
+    transition: color 0.4s;
+  }
+  .cval.ok     { color: var(--green); }
+  .cval.warn   { color: var(--warn); }
+  .cval.danger { color: var(--danger); }
+  .csub { font-size: 0.73rem; color: var(--muted); margin-top: 0.35rem; }
+
+  /* ── Banner alerta ── */
+  #banner {
+    grid-column: span 12; display:none;
+    background: rgba(255,69,96,.1); border:1px solid var(--danger);
+    border-radius: 12px; padding: 0.75rem 1.1rem;
+    font-size: 0.88rem; color: var(--danger);
+    animation: blink 1.8s ease infinite;
+  }
+  @keyframes blink {
+    0%,100%{ border-color:var(--danger); }
+    50%    { border-color: rgba(255,69,96,.25); }
+  }
+
+  /* ── Toggle ── */
+  .row { display:flex; align-items:center; justify-content:space-between; gap:.7rem; margin-top:.5rem; }
+  .toggle { position:relative; width:48px; height:26px; flex-shrink:0; }
+  .toggle input { opacity:0; width:0; height:0; }
+  .slider {
+    position:absolute; inset:0; background:var(--border);
+    border-radius:13px; cursor:pointer; transition:background .3s;
+  }
+  .slider::before {
+    content:''; position:absolute;
+    width:18px; height:18px; left:4px; top:4px;
+    background:#fff; border-radius:50%; transition:transform .3s;
+  }
+  input:checked+.slider { background: var(--green); }
+  input:checked+.slider::before { transform: translateX(22px); }
+
+  /* ── Botões ── */
+  .btn {
+    width:100%; padding:.65rem 1rem; border:none; border-radius:10px;
+    font-size:.87rem; font-weight:700; cursor:pointer;
+    transition: opacity .15s, transform .1s;
+    margin-top:.6rem;
+  }
+  .btn:active { transform: scale(.97); }
+  .btn-blue  { background: var(--accent); color:#000; }
+  .btn-green { background: var(--green);  color:#000; }
+
+  /* ── Horários ── */
+  .hrow {
+    display:grid; grid-template-columns: 34px 1fr auto;
+    align-items:center; gap:.55rem;
+    padding:.5rem 0; border-bottom: 1px solid var(--border);
+  }
+  .hrow:last-child { border-bottom: none; }
+  .hslot {
+    background: var(--surface); border:1px solid var(--border);
+    border-radius:6px; font-size:.68rem; color:var(--muted);
+    text-align:center; padding:.25rem;
+  }
+  input[type=time] {
+    background: var(--surface); border:1px solid var(--border);
+    border-radius:8px; color:var(--text); padding:.38rem .6rem;
+    font-size:.83rem; width:100%; outline:none;
+  }
+  input[type=time]:focus { border-color:var(--accent); }
+
+  /* ── Gráfico ── */
+  #grafico { width:100%; height:130px; display:block; border-radius:10px; }
+
+  /* ── Log ── */
+  #log {
+    font-family: 'Courier New', monospace; font-size: .74rem;
+    color: var(--muted); line-height:1.65; max-height:170px;
+    overflow-y:auto;
+  }
+  .lline { color:var(--text); }
+  .lok   { color:var(--green); }
+  .lwarn { color:var(--warn); }
+  .lerr  { color:var(--danger); }
+
+  /* ── Seção título ── */
+  .stitle {
+    grid-column: span 12;
+    font-size:.68rem; text-transform:uppercase; letter-spacing:.1em;
+    color:var(--muted); border-bottom:1px solid var(--border);
+    padding-bottom:.45rem; margin-top:.3rem;
+  }
+
+  /* ── Modo de conexão ── */
+  .mode-tabs {
+    display:flex; gap:.5rem; margin-bottom:.8rem;
+  }
+  .mtab {
+    flex:1; padding:.4rem; border-radius:8px; border:1px solid var(--border);
+    background: var(--surface); color:var(--muted); font-size:.75rem;
+    cursor:pointer; text-align:center; transition: all .2s;
+  }
+  .mtab.active { background:var(--accent); color:#000; border-color:var(--accent); font-weight:600; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">🐠 Aquário Inteligente</div>
+  <div class="pill">
+    <div class="pill-dot" id="dot"></div>
+    <span id="conn-txt">Desconectado</span>
+  </div>
+</header>
+
+<main>
+  <!-- Banner alertas -->
+  <div id="banner">⚠️ <span id="banner-msg"></span></div>
+
+  <!-- Leituras -->
+  <div class="card span3">
+    <div class="clabel">Temperatura</div>
+    <div class="cval" id="v-temp">--</div>
+    <div class="csub" id="s-temp">aguardando...</div>
+  </div>
+
+  <div class="card span3">
+    <div class="clabel">Nível da Água</div>
+    <div class="cval" id="v-nivel">--</div>
+    <div class="csub" id="s-nivel">aguardando...</div>
+  </div>
+
+  <div class="card span3">
+    <div class="clabel">Sinal Wi-Fi (RSSI)</div>
+    <div class="cval" id="v-rssi">--</div>
+    <div class="csub" id="s-rssi">dBm</div>
+  </div>
+
+  <div class="card span3">
+    <div class="clabel">Última Leitura</div>
+    <div class="cval" id="v-ts" style="font-size:.9rem;padding-top:.4rem">--</div>
+    <div class="csub">timestamp ESP32</div>
+  </div>
+
+  <!-- Controles -->
+  <div class="stitle">Controles</div>
+
+  <div class="card span4">
+    <div class="clabel">Bomba d'Água</div>
+    <div class="row">
+      <span id="bomba-txt" style="font-size:.9rem">Desligada</span>
+      <label class="toggle">
+        <input type="checkbox" id="t-bomba" onchange="cmdBomba(this.checked)">
+        <span class="slider"></span>
+      </label>
+    </div>
+    <div class="csub" style="margin-top:.5rem">Relé controlado remotamente</div>
+  </div>
+
+  <div class="card span4">
+    <div class="clabel">Alimentação Manual</div>
+    <button class="btn btn-blue" onclick="cmdAlimentar()">🐟 Alimentar Agora</button>
+    <div class="csub">Abre o servo alimentador</div>
+  </div>
+
+  <div class="card span4">
+    <div class="clabel">Dispositivo</div>
+    <div class="csub" style="margin-top:.4rem">ID: <span id="v-device">--</span></div>
+    <div class="csub">Uptime: <span id="v-uptime">--</span></div>
+    <button class="btn btn-green" style="margin-top:.5rem" onclick="cmdStatus()">🔄 Solicitar Status</button>
+  </div>
+
+  <!-- Horários -->
+  <div class="card span12">
+    <div class="clabel">Horários de Alimentação</div>
+    <div id="hlist" style="margin-top:.7rem"></div>
+    <button class="btn btn-green" style="max-width:220px;margin-top:.9rem" onclick="salvarHorarios()">
+      💾 Salvar Horários no ESP32
+    </button>
+  </div>
+
+  <!-- Gráfico -->
+  <div class="card span12">
+    <div class="clabel" style="margin-bottom:.5rem">Temperatura — Histórico em tempo real</div>
+    <canvas id="grafico"></canvas>
+  </div>
+
+  <!-- Log -->
+  <div class="card span12">
+    <div class="clabel" style="margin-bottom:.5rem">Log de Eventos</div>
+    <div id="log">Aguardando conexão...</div>
+  </div>
+</main>
+
+<script>
+// ─────────────────────────────────────────────────
+// CONFIGURAÇÃO
+// Quando rodar no Vercel, troque pelos seus dados.
+// ─────────────────────────────────────────────────
+const CFG = {
+  // Modo 1: MQTT direto (WebSocket — mais rápido, tempo real)
+  mqttUrl:    'wss://SEU_BROKER.s2.eu.hivemq.cloud:8884/mqtt',
+  mqttUser:   'SEU_USUARIO',
+  mqttPass:   'SUA_SENHA',
+
+  // Modo 2: API HTTP (via /api/status e /api/comando)
+  // Use quando o broker não suportar WebSocket
+  apiBase:    '',          // vazio = usa o próprio domínio Vercel
+  panelToken: 'token-do-painel',  // igual ao PANEL_TOKEN no Vercel
+
+  // Polling HTTP (se MQTT estiver desligado)
+  pollInterval: 5000,   // ms
+};
+
+// ─────────────────────────────────────────────────
+const T_STATUS  = 'aquario/status';
+const T_ALIM    = 'aquario/alimentar';
+const T_BOMBA   = 'aquario/bomba';
+const T_HORARIO = 'aquario/horario';
+const T_CMD     = 'aquario/cmd';
+
+let mqttClient  = null;
+let pollTimer   = null;
+let tempHist    = [];
+const HIST_MAX  = 60;
+
+let horarios = [
+  {slot:0, hora:8,  minuto:0,  ativo:false},
+  {slot:1, hora:12, minuto:0,  ativo:false},
+  {slot:2, hora:18, minuto:0,  ativo:false},
+  {slot:3, hora:21, minuto:0,  ativo:false},
+];
+
+// ─── MQTT ────────────────────────────────────────
+function conectarMQTT() {
+  log('Conectando ao MQTT (WebSocket)...', 'lline');
+  mqttClient = mqtt.connect(CFG.mqttUrl, {
+    username: CFG.mqttUser,
+    password: CFG.mqttPass,
+    clientId: 'painel_' + Math.random().toString(16).slice(2,8),
+    clean: true,
+    reconnectPeriod: 4000,
+  });
+
+  mqttClient.on('connect', () => {
+    setConn('on', 'MQTT conectado');
+    mqttClient.subscribe([T_STATUS, 'aquario/alertas']);
+    log('Conectado! Ouvindo tópicos...', 'lok');
+  });
+
+  mqttClient.on('message', (topic, raw) => {
+    try {
+      const d = JSON.parse(raw.toString());
+      if (topic === T_STATUS)       renderStatus(d);
+      if (topic === 'aquario/alertas') renderAlerta(d);
+    } catch { log('JSON inválido recebido', 'lwarn'); }
+  });
+
+  mqttClient.on('reconnect', () => { setConn('err', 'Reconectando...'); log('Reconectando MQTT...','lwarn'); });
+  mqttClient.on('error',     e  => { log('Erro MQTT: '+e.message,'lerr'); });
+  mqttClient.on('close',     () => { setConn('off', 'Desconectado'); });
+}
+
+function publicarMQTT(topico, payload) {
+  if (mqttClient && mqttClient.connected) {
+    mqttClient.publish(topico, JSON.stringify(payload));
+    return true;
+  }
+  return false;
+}
+
+// ─── API HTTP (fallback / polling) ───────────────
+async function apiGet() {
+  try {
+    const r = await fetch(CFG.apiBase + '/api/status');
+    const d = await r.json();
+    if (d.status) renderStatus(d.status);
+    if (d.history) {
+      // Carrega histórico do KV no gráfico
+      d.history.slice().reverse().forEach(item => {
+        const p = typeof item === 'string' ? JSON.parse(item) : item;
+        if (p.temperatura) tempHist.push({ v: parseFloat(p.temperatura), t: p.timestamp });
+      });
+      if (tempHist.length > HIST_MAX) tempHist = tempHist.slice(-HIST_MAX);
+      desenharGrafico();
+    }
+  } catch(e) { log('Falha no polling HTTP: '+e.message, 'lerr'); }
+}
+
+async function apiPost(topico, payload) {
+  try {
+    const r = await fetch(CFG.apiBase + '/api/comando', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + CFG.panelToken,
+      },
+      body: JSON.stringify({ topico, payload }),
+    });
+    return r.ok;
+  } catch(e) { log('Falha ao enviar comando: '+e.message,'lerr'); return false; }
+}
+
+// ─── Enviar comando (MQTT primeiro, HTTP como fallback) ──
+async function enviar(topico, payload) {
+  if (!publicarMQTT(topico, payload)) {
+    log('MQTT indisponível — enviando via HTTP...', 'lwarn');
+    await apiPost(topico, payload);
+  }
+}
+
+// ─── Comandos ─────────────────────────────────────
+async function cmdAlimentar() {
+  await enviar(T_ALIM, { acao:'alimentar', ts: new Date().toISOString() });
+  log('▶ Alimentação manual acionada!', 'lok');
+}
+
+async function cmdBomba(ligar) {
+  await enviar(T_BOMBA, { ligar });
+  document.getElementById('bomba-txt').textContent = ligar ? 'Ligada ✓' : 'Desligada';
+  log('▶ Bomba: ' + (ligar ? 'LIGADA' : 'DESLIGADA'), 'lok');
+}
+
+async function cmdStatus() {
+  await enviar(T_CMD, { cmd:'status' });
+  log('▶ Solicitação de status enviada', 'lline');
+}
+
+async function salvarHorarios() {
+  document.querySelectorAll('.hrow').forEach((row, i) => {
+    const tv  = row.querySelector('input[type=time]').value;
+    const ck  = row.querySelector('input[type=checkbox]').checked;
+    const [h, m] = tv ? tv.split(':').map(Number) : [horarios[i].hora, horarios[i].minuto];
+    horarios[i] = { slot:i, hora:h, minuto:m, ativo:ck };
+  });
+  for (const h of horarios) {
+    await enviar(T_HORARIO, h);
+    await new Promise(r => setTimeout(r, 200)); // pequeno delay entre publicações
+  }
+  log('✓ Horários enviados ao ESP32!', 'lok');
+}
+
+// ─── Render dados ─────────────────────────────────
+function renderStatus(d) {
+  const temp  = parseFloat(d.temperatura ?? NaN);
+  const nivel = parseFloat(d.nivel_cm ?? NaN);
+  const rssi  = parseInt(d.rssi ?? 0);
+
+  // Temperatura
+  if (!isNaN(temp)) {
+    const eT = e('v-temp');
+    eT.textContent = temp.toFixed(1) + ' °C';
+    const hot = temp > 30, cold = temp < 22;
+    eT.className = 'cval ' + (hot||cold ? (hot?'danger':'warn') : 'ok');
+    e('s-temp').textContent = hot ? '⚠ Temperatura alta!' : cold ? '⚠ Temperatura baixa!' : 'Normal (22–30 °C)';
+    tempHist.push({ v: temp, t: d.timestamp });
+    if (tempHist.length > HIST_MAX) tempHist.shift();
+    desenharGrafico();
+  }
+
+  // Nível
+  if (!isNaN(nivel)) {
+    const eN = e('v-nivel');
+    eN.textContent = nivel.toFixed(1) + ' cm';
+    eN.className = 'cval ' + (d.alerta_nivel ? 'danger' : 'ok');
+    e('s-nivel').textContent = d.alerta_nivel ? '⚠ Nível crítico!' : 'Nível adequado';
+  }
+
+  // RSSI
+  e('v-rssi').textContent = rssi + ' dBm';
+  e('v-rssi').className   = 'cval ' + (rssi>-60?'ok':rssi>-75?'warn':'danger');
+  e('s-rssi').textContent  = rssi>-60?'Excelente':rssi>-75?'Bom':'Fraco';
+
+  // Timestamp
+  if (d.timestamp) e('v-ts').textContent = d.timestamp.replace('T',' ');
+
+  // Device
+  if (d.device) e('v-device').textContent = d.device;
+
+  // Bomba
+  const bomba = d.bomba === true;
+  e('t-bomba').checked = bomba;
+  e('bomba-txt').textContent = bomba ? 'Ligada ✓' : 'Desligada';
+
+  // Alertas banner
+  const msgs = [];
+  if (d.alerta_nivel) msgs.push('Nível de água BAIXO!');
+  if (d.alerta_temp)  msgs.push('Temperatura fora do range!');
+  e('banner').style.display = msgs.length ? 'block' : 'none';
+  if (msgs.length) e('banner-msg').textContent = msgs.join(' | ');
+
+  // Horários recebidos do ESP32
+  if (d.horarios) {
+    d.horarios.forEach(h => {
+      if (h.slot >= 0 && h.slot < 4)
+        horarios[h.slot] = { slot:h.slot, hora:h.hora, minuto:h.minuto, ativo:h.ativo };
+    });
+    renderHorarios();
+  }
+
+  if (!e('conn-txt').textContent.includes('MQTT'))
+    setConn('on', 'HTTP polling ativo');
+}
+
+function renderAlerta(d) {
+  log('🚨 ALERTA: ' + d.mensagem, 'lerr');
+  if (Notification.permission === 'granted')
+    new Notification('Aquário 🐠', { body: d.mensagem });
+}
+
+// ─── Horários UI ──────────────────────────────────
+function renderHorarios() {
+  e('hlist').innerHTML = horarios.map((h,i) => `
+    <div class="hrow">
+      <div class="hslot">${i+1}</div>
+      <input type="time"
+        value="${String(h.hora).padStart(2,'0')}:${String(h.minuto).padStart(2,'0')}">
+      <label class="toggle" style="width:44px;height:24px">
+        <input type="checkbox" ${h.ativo?'checked':''}>
+        <span class="slider"></span>
+      </label>
+    </div>
+  `).join('');
+}
+
+// ─── Gráfico ──────────────────────────────────────
+function desenharGrafico() {
+  const c   = e('grafico');
+  const ctx = c.getContext('2d');
+  const W   = c.offsetWidth;
+  const H   = 130;
+  c.width   = W * devicePixelRatio;
+  c.height  = H * devicePixelRatio;
+  ctx.scale(devicePixelRatio, devicePixelRatio);
+
+  ctx.fillStyle = '#0d1e30';
+  ctx.fillRect(0, 0, W, H);
+
+  if (tempHist.length < 2) return;
+
+  const vals = tempHist.map(p => p.v);
+  const minV = Math.min(...vals) - 1.5;
+  const maxV = Math.max(...vals) + 1.5;
+  const pad  = { t:14, b:20, l:38, r:12 };
+  const cW   = W - pad.l - pad.r;
+  const cH   = H - pad.t - pad.b;
+  const xOf  = i => pad.l + (i / (tempHist.length - 1)) * cW;
+  const yOf  = v => pad.t + (1 - (v - minV) / (maxV - minV)) * cH;
+
+  // Grade
+  [22, 25, 28, 30].forEach(t => {
+    if (t < minV || t > maxV) return;
+    const y = yOf(t);
+    ctx.strokeStyle = '#1a3351'; ctx.lineWidth = 1;
+    ctx.beginPath(); ctx.moveTo(pad.l, y); ctx.lineTo(W-pad.r, y); ctx.stroke();
+    ctx.fillStyle = '#6a8faa'; ctx.font = '10px sans-serif';
+    ctx.fillText(t + '°', 3, y + 4);
+  });
+
+  // Zona segura (22–30 °C) com preenchimento sutil
+  const y30 = yOf(30), y22 = yOf(22);
+  ctx.fillStyle = 'rgba(0,229,176,0.04)';
+  ctx.fillRect(pad.l, y30, cW, y22 - y30);
+
+  // Área abaixo da linha
+  ctx.beginPath();
+  ctx.moveTo(xOf(0), yOf(tempHist[0].v));
+  tempHist.forEach((p,i) => i && ctx.lineTo(xOf(i), yOf(p.v)));
+  ctx.lineTo(xOf(tempHist.length-1), H-pad.b);
+  ctx.lineTo(xOf(0), H-pad.b);
+  ctx.closePath();
+  const g = ctx.createLinearGradient(0, pad.t, 0, H-pad.b);
+  g.addColorStop(0, 'rgba(0,200,255,.22)');
+  g.addColorStop(1, 'rgba(0,200,255,.01)');
+  ctx.fillStyle = g; ctx.fill();
+
+  // Linha
+  ctx.beginPath(); ctx.strokeStyle='#00c8ff'; ctx.lineWidth=2;
+  ctx.moveTo(xOf(0), yOf(tempHist[0].v));
+  tempHist.forEach((p,i) => i && ctx.lineTo(xOf(i), yOf(p.v)));
+  ctx.stroke();
+
+  // Ponto atual
+  const lx = xOf(tempHist.length-1), ly = yOf(tempHist[tempHist.length-1].v);
+  ctx.beginPath(); ctx.arc(lx, ly, 4, 0, Math.PI*2);
+  ctx.fillStyle='#00c8ff'; ctx.fill();
+}
+
+// ─── Utils ────────────────────────────────────────
+function e(id) { return document.getElementById(id); }
+function setConn(st, txt) {
+  const dot = e('dot');
+  dot.className = 'pill-dot ' + (st==='on'?'on':st==='err'?'err':'');
+  e('conn-txt').textContent = txt;
+}
+function log(msg, cls='lline') {
+  const el = e('log');
+  const d  = document.createElement('div');
+  d.className = cls;
+  d.textContent = '[' + new Date().toLocaleTimeString('pt-BR') + '] ' + msg;
+  el.insertBefore(d, el.firstChild);
+  if (el.children.length > 80) el.removeChild(el.lastChild);
+}
+
+// ─── Init ─────────────────────────────────────────
+document.addEventListener('DOMContentLoaded', () => {
+  renderHorarios();
+  conectarMQTT();
+
+  // Polling HTTP como complemento (carrega histórico do KV)
+  apiGet();
+  pollTimer = setInterval(apiGet, CFG.pollInterval);
+
+  if (Notification.permission === 'default') Notification.requestPermission();
+  window.addEventListener('resize', desenharGrafico);
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,14 @@
+{
+  "name": "aquario-inteligente-painel",
+  "version": "1.0.0",
+  "description": "Painel web do Aquário Inteligente com ESP32",
+  "scripts": {
+    "dev": "vercel dev"
+  },
+  "dependencies": {
+    "mqtt": "^4.3.7"
+  },
+  "devDependencies": {
+    "vercel": "^33.0.0"
+  }
+}
